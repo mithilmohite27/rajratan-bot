@@ -153,7 +153,7 @@ def simulated_llm_parser(message: str) -> dict:
                      "purchase kiya","kharidya"}
     LABOUR_KW     = {"labour","worker","salary","wages","majoor","paghar","mazdoor"}
     CASH_IN_KW    = {"received","receive","aavya","aavyu","bheje","mile","income","advance",
-                     "payment received","aaya paisa"}
+                     "payment received","aaya paisa","payment"}
     CASH_OUT_KW   = {"paid","diya","aapiya","expense","diesel","repair","repairing","kharch",
                      "kharcha","aapi didho","diye","cash diye","unloading"}
     CASHFLOW_KW   = CASH_IN_KW | CASH_OUT_KW | {"cash","payment","fund"}
@@ -166,37 +166,58 @@ def simulated_llm_parser(message: str) -> dict:
         combined = set().union(*kw_sets)
         return bool(tokens & combined) or any(k in msg for k in combined if " " in k)
 
-    # ── 1. Daily Block Production ─────────────────────────────────────────────
-    # Must check BEFORE client-order because "block" appears in both.
-    # Production = block keyword + manufacturing verb, NO client/sale verb.
-    is_production = has(PRODUCTION_KW) or (
-        has(BLOCK_KW) and not has(CLIENT_KW - BLOCK_KW) and not has(CASH_OUT_KW)
-    )
-    is_sale_of_blocks = has(CLIENT_KW) and has(BLOCK_KW)
-
-    if is_production and not is_sale_of_blocks:
-        qty_val = _extract_block_qty(msg)
-        block_type_m = re.search(r"(\d+\s*mm|paver|paving)", msg, re.IGNORECASE)
-        block_type   = block_type_m.group(1).upper() if block_type_m else "Standard"
+    # ── 0. Base Stock Setter ──────────────────────────────────────────────────
+    if re.search(r"\bbase\b|\bstarting stock\b|\binitial stock\b|\bset stock\b", msg):
+        val = _first_number(msg)
+        is_cement = has(CEMENT_KW)
+        sheet = "Cement_Stocks" if is_cement else "Block_Stocks"
+        label = "Cement" if is_cement else "Block"
         return {
             "language": lang,
-            "intent":   "add_production",
-            "target_sheet": "Block_Stocks",
-            "extracted_data": {
-                "Date": today,
-                "New_Stock": qty_val,
-                "Block_Type": block_type,
-                "Note": message,
-            },
+            "intent":   "set_base_stock",
+            "target_sheet": sheet,
+            "extracted_data": {"base_value": val, "Date": today},
             "confirmation_message": (
-                f"🏭 *Block Production*\n"
-                f"Qty: {int(qty_val)} blocks ({block_type})\n\n"
+                f"📌 *Set {label} Base Stock*\n"
+                f"Starting value: {int(val)} units\n"
+                f"Date: {today}\n\n"
                 f"Confirm? Reply *Yes* / *No*"
             ),
             "missing_fields": [],
         }
 
-    # ── 2. Block / Paving Stock (opening-new-sales format) ───────────────────
+    # ── 1. Daily Block Production ─────────────────────────────────────────────
+    is_production    = has(PRODUCTION_KW) or (
+        has(BLOCK_KW) and not has(CLIENT_KW - BLOCK_KW) and not has(CASH_OUT_KW)
+    )
+    is_sale_of_blocks = has(CLIENT_KW) and has(BLOCK_KW)
+
+    if is_production and not is_sale_of_blocks:
+        qty_val      = _extract_block_qty(msg)
+        block_type_m = re.search(r"(\d+\s*mm|paver|paving)", msg, re.IGNORECASE)
+        block_type   = block_type_m.group(1).upper() if block_type_m else "Standard"
+        sales_m      = re.search(r"\b(?:sales?|sold|out)\s*[:\-]?\s*(\d+)", msg)
+        sales_val    = float(sales_m.group(1)) if sales_m else 0.0
+        return {
+            "language": lang,
+            "intent":   "add_production",
+            "target_sheet": "Block_Stocks",
+            "extracted_data": {
+                "Date":      today,
+                "New Stock": qty_val,
+                "Sales":     sales_val,
+                "Note":      message,
+            },
+            "confirmation_message": (
+                f"🏭 *Block Production*\n"
+                f"New Stock: {int(qty_val)} blocks ({block_type})\n"
+                f"Sales: {int(sales_val)}\n\n"
+                f"Confirm? Reply *Yes* / *No*"
+            ),
+            "missing_fields": [],
+        }
+
+    # ── 2. Block Stock manual update (opening-new-sales format) ──────────────
     if has(BLOCK_KW) and re.search(r"\bopening\b", msg):
         op, ni, sl = _stock_fields(msg)
         total   = op + ni
@@ -206,8 +227,12 @@ def simulated_llm_parser(message: str) -> dict:
             "intent":   "update_block_stock",
             "target_sheet": "Block_Stocks",
             "extracted_data": {
-                "Date": today, "Opening": op, "New_In": ni,
-                "Total": total, "Sales": sl, "Closing": closing,
+                "Date":          today,
+                "Opening Stock": op,
+                "New Stock":     ni,
+                "Total":         total,
+                "Sales":         sl,
+                "Closing Stock": closing,
             },
             "confirmation_message": (
                 f"📦 *Block Stock Update*\n"
@@ -218,32 +243,40 @@ def simulated_llm_parser(message: str) -> dict:
             "missing_fields": [],
         }
 
-    # ── 3. Cement stock / purchase ────────────────────────────────────────────
+    # ── 3. Cement Stock ───────────────────────────────────────────────────────
     if has(CEMENT_KW):
         if re.search(r"\bopening\b", msg):
             op, ni, sl = _stock_fields(msg)
-            total   = op + ni
-            closing = total - sl
+            ext_m    = re.search(r"\bexternal\s*[:\-]?\s*(\d+)", msg)
+            ext_sale = int(ext_m.group(1)) if ext_m else 0
+            total    = op + ni
+            closing  = total - sl - ext_sale
             return {
                 "language": lang,
                 "intent":   "update_cement_stock",
                 "target_sheet": "Cement_Stocks",
                 "extracted_data": {
-                    "Date": today, "Opening": op, "New_In": ni,
-                    "Total": total, "Sales": sl, "Closing": closing,
+                    "Date":          today,
+                    "Opening Stock": op,
+                    "New Stock":     ni,
+                    "Total":         total,
+                    "Sales":         sl,
+                    "External Sale": ext_sale,
+                    "Closing Stock": closing,
                 },
                 "confirmation_message": (
                     f"🏗️ *Cement Stock Update*\n"
                     f"Opening: {op} | New: {ni}\n"
-                    f"Total: {total} | Sales: {sl}\n"
+                    f"Total: {total} | Sales: {sl} | Ext: {ext_sale}\n"
                     f"Closing: {closing}\n\nConfirm? Reply *Yes* / *No*"
                 ),
                 "missing_fields": [],
             }
         else:
-            # Purchase entry
             qty_val  = _extract_qty(msg)
             rate_val = _extract_rate(msg)
+            ext_m    = re.search(r"\bexternal\s*[:\-]?\s*(\d+)", msg)
+            ext_sale = int(ext_m.group(1)) if ext_m else 0
             missing  = []
             if rate_val == 0.0: missing.append("rate")
             return {
@@ -251,15 +284,17 @@ def simulated_llm_parser(message: str) -> dict:
                 "intent":   "add_cement_purchase",
                 "target_sheet": "Cement_Stocks",
                 "extracted_data": {
-                    "Date": today,
-                    "New_In": qty_val,
-                    "Rate_INR": rate_val,
-                    "Amount_INR": round(qty_val * rate_val, 2),
-                    "Note": message,
+                    "Date":          today,
+                    "New Stock":     qty_val,
+                    "Sales":         0,
+                    "External Sale": ext_sale,
+                    "Rate_INR":      rate_val,
+                    "Amount_INR":    round(qty_val * rate_val, 2),
+                    "Note":          message,
                 },
                 "confirmation_message": (
                     f"🏗️ *Cement Purchase*\n"
-                    f"Qty: {qty_val} tons/bags\n"
+                    f"Qty: {qty_val} bags/tons\n"
                     f"Rate: ₹{rate_val}\n"
                     f"Amount: ₹{round(qty_val * rate_val, 2)}\n\n"
                     f"Confirm? Reply *Yes* / *No*"
@@ -301,7 +336,36 @@ def simulated_llm_parser(message: str) -> dict:
             "missing_fields": missing,
         }
 
-    # ── 5. Client Order / Sale (brass or blocks) ──────────────────────────────
+     # ── 5. Cashflow ───────────────────────────────────────────────────────────
+    if has(CASHFLOW_KW):
+        amount_val = _first_number(msg)
+        flow_type  = "IN" if has(CASH_IN_KW) else "OUT"
+        # Extract payer/payee name for context
+        party_m = re.search(
+            r"(?:from|thi|se|ne|ko)\s+([A-Za-z][A-Za-z\s]{2,25})", message, re.IGNORECASE
+        )
+        party = party_m.group(1).strip().title() if party_m else ""
+        desc  = f"{party} — " if party else ""
+        return {
+            "language": lang,
+            "intent":   "add_cashflow",
+            "target_sheet": "Cashflow",
+            "extracted_data": {
+                "Date": today, "Type": flow_type,
+                "Amount_INR": amount_val,
+                "Description": desc + message[:80],
+            },
+            "confirmation_message": (
+                f"💰 *Cashflow*\n"
+                f"Type: {'IN ⬆️' if flow_type=='IN' else 'OUT ⬇️'}\n"
+                f"Amount: ₹{amount_val}\n"
+                f"{f'Party: {party}' if party else ''}\n\n"
+                f"Confirm? Reply *Yes* / *No*"
+            ).strip(),
+            "missing_fields": [],
+        }    
+
+    # ── 6. Client Order / Sale (brass or blocks) ──────────────────────────────
     if has(CLIENT_KW) and not has(CASH_IN_KW):
         qty_val    = _extract_qty(msg)
         rate_val   = _extract_rate(msg)
@@ -342,7 +406,7 @@ def simulated_llm_parser(message: str) -> dict:
             "missing_fields": [],
         }
 
-    # ── 6. Labour / Salary ────────────────────────────────────────────────────
+    # ── 7. Labour / Salary ────────────────────────────────────────────────────
     if has(LABOUR_KW):
         name_m = re.search(
             r"\b(?:name|worker|labour|majoor|manager)\s*[:\-]?\s*(?P<name>[a-z ]+)", msg
@@ -363,35 +427,6 @@ def simulated_llm_parser(message: str) -> dict:
                 f"Amount: ₹{amount_val}\n\n"
                 f"Confirm? Reply *Yes* / *No*"
             ),
-            "missing_fields": [],
-        }
-
-    # ── 7. Cashflow ───────────────────────────────────────────────────────────
-    if has(CASHFLOW_KW):
-        amount_val = _first_number(msg)
-        flow_type  = "IN" if has(CASH_IN_KW) else "OUT"
-        # Extract payer/payee name for context
-        party_m = re.search(
-            r"(?:from|thi|se|ne|ko)\s+([A-Za-z][A-Za-z\s]{2,25})", message, re.IGNORECASE
-        )
-        party = party_m.group(1).strip().title() if party_m else ""
-        desc  = f"{party} — " if party else ""
-        return {
-            "language": lang,
-            "intent":   "add_cashflow",
-            "target_sheet": "Cashflow",
-            "extracted_data": {
-                "Date": today, "Type": flow_type,
-                "Amount_INR": amount_val,
-                "Description": desc + message[:80],
-            },
-            "confirmation_message": (
-                f"💰 *Cashflow*\n"
-                f"Type: {'IN ⬆️' if flow_type=='IN' else 'OUT ⬇️'}\n"
-                f"Amount: ₹{amount_val}\n"
-                f"{f'Party: {party}' if party else ''}\n\n"
-                f"Confirm? Reply *Yes* / *No*"
-            ).strip(),
             "missing_fields": [],
         }
 
@@ -460,33 +495,23 @@ def write_stocks_with_continuity(sheet_name: str, data: dict):
     ws.append_row(row)
 
 def write_production_to_block_stocks(data: dict):
+    """Adds new production qty to New_Stock column, recalculates Total."""
     ws       = get_sheet("Block_Stocks")
     all_vals = ws.get_all_values()
-    headers  = all_vals[0] if all_vals else []
-
-    prev_closing = 0.0
     if len(all_vals) > 1:
         last_row = all_vals[-1]
-        for col in ["Closing Stock", "Closing"]:
-            if col in headers:
-                idx = headers.index(col)
-                try:
-                    prev_closing = float(str(last_row[idx]).replace(",",""))
-                except:
-                    prev_closing = 0.0
-                break
-
-    ni = float(data.get("New_Stock", 0))
-    mapped = {
-        "Date":          data.get("Date", ""),
-        "Opening Stock": prev_closing,
-        "New Stock":     ni,
-        "Total":         prev_closing + ni,
-        "Sales":         0,
-        "Closing Stock": prev_closing + ni,
-    }
-    row = [mapped.get(h, "") for h in headers]
-    ws.append_row(row)
+        headers  = all_vals[0]
+        try:
+            closing_idx  = headers.index("Closing")
+            prev_closing = float(last_row[closing_idx]) if last_row[closing_idx] else 0.0
+        except (ValueError, IndexError):
+            prev_closing = 0.0
+        data["Opening"] = prev_closing
+        ni = float(data.get("New_Stock", 0))
+        data["New_In"]  = ni
+        data["Total"]   = prev_closing + ni
+        data["Closing"] = prev_closing + ni
+    write_to_sheet("Block_Stocks", data)
 
 # ─── Webhook ──────────────────────────────────────────────────────────────────
 
