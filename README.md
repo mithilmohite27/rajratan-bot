@@ -202,11 +202,10 @@ rajratan-bot/
 ## 👤 Author
 
 **Mithil Mohite (Dominic)**  
-Associate Trainee — Data Analysis & QA @ Apexon  
-AWS Certified Cloud Practitioner | AI/ML Enthusiast  
+AI/ML Enthusiast  
 
-[![LinkedIn](https://img.shields.io/badge/LinkedIn-Connect-blue)](https://linkedin.com/in/YOUR_LINKEDIN)
-[![GitHub](https://img.shields.io/badge/GitHub-Follow-black)](https://github.com/YOUR_USERNAME)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-Connect-blue)](https://www.linkedin.com/in/mithilmohite/)
+[![GitHub](https://img.shields.io/badge/GitHub-Follow-black)](https://github.com/mithilmohite27)
 
 ---
 
