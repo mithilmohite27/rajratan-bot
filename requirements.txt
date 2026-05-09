@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+twilio
+gspread
+google-auth
+pandas
+streamlit
+plotly
+python-dotenv
