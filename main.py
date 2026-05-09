@@ -6,6 +6,14 @@ from twilio.twiml.messaging_response import MessagingResponse
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
+import os, json, tempfile
+
+_creds_content = os.getenv("GOOGLE_CREDS_JSON_CONTENT")
+if _creds_content:
+    _tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+    json.dump(json.loads(_creds_content), _tmp)
+    _tmp.close()
+    os.environ["GOOGLE_CREDS_JSON"] = _tmp.name
 
 app = FastAPI(title="Rajratan Enterprises - WhatsApp Bot")
 
