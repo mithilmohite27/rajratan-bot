@@ -302,7 +302,7 @@ def simulated_llm_parser(message: str) -> dict:
         }
 
     # ── 5. Client Order / Sale (brass or blocks) ──────────────────────────────
-    if has(CLIENT_KW):
+    if has(CLIENT_KW) and not has(CASH_IN_KW):
         qty_val    = _extract_qty(msg)
         rate_val   = _extract_rate(msg)
         client_val = _extract_client(message)   # use original case
@@ -427,42 +427,66 @@ def write_to_sheet(target_sheet: str, data: dict):
 def write_stocks_with_continuity(sheet_name: str, data: dict):
     ws       = get_sheet(sheet_name)
     all_vals = ws.get_all_values()
+    headers  = all_vals[0] if all_vals else []
+
+    prev_closing = 0.0
     if len(all_vals) > 1:
         last_row = all_vals[-1]
-        headers  = all_vals[0]
-        try:
-            closing_idx = headers.index("Closing")
-            try:
-                prev_closing = float(last_row[closing_idx])
-            except (ValueError, TypeError):
-                prev_closing = 0.0
-            data["Opening"] = prev_closing
-            ni = float(data.get("New_In", 0))
-            sl = float(data.get("Sales", 0))
-            data["Total"]   = prev_closing + ni
-            data["Closing"] = prev_closing + ni - sl
-        except (ValueError, IndexError):
-            pass
-    write_to_sheet(sheet_name, data)
+        for col in ["Closing Stock", "Closing"]:
+            if col in headers:
+                idx = headers.index(col)
+                try:
+                    prev_closing = float(str(last_row[idx]).replace(",",""))
+                except:
+                    prev_closing = 0.0
+                break
+
+    ni = float(data.get("New_In", data.get("New Stock", 0)))
+    sl = float(data.get("Sales", 0))
+
+    mapped = {
+        "Date":          data.get("Date", ""),
+        "Opening Stock": prev_closing,
+        "New Stock":     ni,
+        "Total":         prev_closing + ni,
+        "Sales":         sl,
+        "Closing Stock": prev_closing + ni - sl,
+    }
+    if sheet_name == "Cement_Stocks":
+        mapped["External Sale"] = data.get("External Sale", 0)
+        mapped["Closing Stock"] = prev_closing + ni - sl - float(mapped["External Sale"])
+
+    row = [mapped.get(h, "") for h in headers]
+    ws.append_row(row)
 
 def write_production_to_block_stocks(data: dict):
-    """Adds new production qty to New_Stock column, recalculates Total."""
     ws       = get_sheet("Block_Stocks")
     all_vals = ws.get_all_values()
+    headers  = all_vals[0] if all_vals else []
+
+    prev_closing = 0.0
     if len(all_vals) > 1:
         last_row = all_vals[-1]
-        headers  = all_vals[0]
-        try:
-            closing_idx  = headers.index("Closing")
-            prev_closing = float(last_row[closing_idx]) if last_row[closing_idx] else 0.0
-        except (ValueError, IndexError):
-            prev_closing = 0.0
-        data["Opening"] = prev_closing
-        ni = float(data.get("New_Stock", 0))
-        data["New_In"]  = ni
-        data["Total"]   = prev_closing + ni
-        data["Closing"] = prev_closing + ni
-    write_to_sheet("Block_Stocks", data)
+        for col in ["Closing Stock", "Closing"]:
+            if col in headers:
+                idx = headers.index(col)
+                try:
+                    prev_closing = float(str(last_row[idx]).replace(",",""))
+                except:
+                    prev_closing = 0.0
+                break
+
+    ni = float(data.get("New_Stock", 0))
+    mapped = {
+        "Date":          data.get("Date", ""),
+        "Opening Stock": prev_closing,
+        "New Stock":     ni,
+        "Total":         prev_closing + ni,
+        "Sales":         0,
+        "Closing Stock": prev_closing + ni,
+    }
+    row = [mapped.get(h, "") for h in headers]
+    ws.append_row(row)
 
 # ─── Webhook ──────────────────────────────────────────────────────────────────
 
