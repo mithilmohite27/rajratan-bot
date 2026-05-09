@@ -1,3 +1,4 @@
+import os, json, tempfile
 from dotenv import load_dotenv
 load_dotenv()
 import os, re
@@ -6,7 +7,6 @@ from twilio.twiml.messaging_response import MessagingResponse
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
-import os, json, tempfile
 
 _creds_content = os.getenv("GOOGLE_CREDS_JSON_CONTENT")
 if _creds_content:
@@ -22,8 +22,14 @@ CREDS_FILE = os.getenv("GOOGLE_CREDS_JSON", "credentials.json")
 SHEET_ID  = os.getenv("GOOGLE_SHEET_ID", "YOUR_SHEET_ID")
 
 def get_sheet(sheet_name: str):
-    creds = Credentials.from_service_account_file(CREDS_FILE, scopes=SCOPES)
-    gc    = gspread.authorize(creds)
+    creds_content = os.getenv("GOOGLE_CREDS_JSON_CONTENT")
+    if creds_content:
+        creds = Credentials.from_service_account_info(
+            json.loads(creds_content), scopes=SCOPES
+        )
+    else:
+        creds = Credentials.from_service_account_file(CREDS_FILE, scopes=SCOPES)
+    gc = gspread.authorize(creds)
     return gc.open_by_key(SHEET_ID).worksheet(sheet_name)
 
 user_sessions: dict = {}
