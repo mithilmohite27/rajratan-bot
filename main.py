@@ -509,24 +509,57 @@ def write_stocks_with_continuity(sheet_name: str, data: dict):
     row = [mapped.get(h, "") for h in headers]
     ws.append_row(row)
 
-def write_production_to_block_stocks(data: dict):
-    """Adds new production qty to New_Stock column, recalculates Total."""
-    ws       = get_sheet("Block_Stocks")
+def write_base_stock(sheet_name: str, base_value: float, date: str):
+    ws      = get_sheet(sheet_name)
+    headers = ws.row_values(1)
+    if sheet_name == "Block_Stocks":
+        row_data = {"Date": date, "Opening Stock": base_value, "New Stock": 0, "Total": base_value, "Sales": 0, "Closing Stock": base_value}
+    else:
+        row_data = {"Date": date, "Opening Stock": base_value, "New Stock": 0, "Total": base_value, "Use": 0, "External Sale": 0, "Closing Stock": base_value}
+    ws.append_row([row_data.get(h, "") for h in headers])
+
+def write_block_stock(data: dict):
+    ws = get_sheet("Block_Stocks")
     all_vals = ws.get_all_values()
+    headers = all_vals[0] if all_vals else []
+    prev_closing = 0.0
     if len(all_vals) > 1:
         last_row = all_vals[-1]
-        headers  = all_vals[0]
-        try:
-            closing_idx  = headers.index("Closing")
-            prev_closing = float(last_row[closing_idx]) if last_row[closing_idx] else 0.0
-        except (ValueError, IndexError):
-            prev_closing = 0.0
-        data["Opening"] = prev_closing
-        ni = float(data.get("New_Stock", 0))
-        data["New_In"]  = ni
-        data["Total"]   = prev_closing + ni
-        data["Closing"] = prev_closing + ni
-    write_to_sheet("Block_Stocks", data)
+        if "Closing Stock" in headers:
+            try: prev_closing = float(str(last_row[headers.index("Closing Stock")]).replace(",", ""))
+            except: prev_closing = 0.0
+    ni = float(data.get("New Stock", 0))
+    sales = float(data.get("Sales", 0))
+    total = prev_closing + ni
+    row_data = {"Date": data.get("Date", ""), "Opening Stock": prev_closing, "New Stock": ni, "Total": total, "Sales": sales, "Closing Stock": total - sales}
+    ws.append_row([row_data.get(h, "") for h in headers])
+
+def write_block_stock_manual(data: dict):
+    ws = get_sheet("Block_Stocks")
+    headers = ws.row_values(1)
+    op = float(data.get("Opening Stock", 0))
+    ni = float(data.get("New Stock", 0))
+    sales = float(data.get("Sales", 0))
+    total = op + ni
+    row_data = {"Date": data.get("Date", ""), "Opening Stock": op, "New Stock": ni, "Total": total, "Sales": sales, "Closing Stock": total - sales}
+    ws.append_row([row_data.get(h, "") for h in headers])
+
+def write_cement_stock(data: dict):
+    ws = get_sheet("Cement_Stocks")
+    all_vals = ws.get_all_values()
+    headers = all_vals[0] if all_vals else []
+    prev_closing = 0.0
+    if len(all_vals) > 1:
+        last_row = all_vals[-1]
+        if "Closing Stock" in headers:
+            try: prev_closing = float(str(last_row[headers.index("Closing Stock")]).replace(",", ""))
+            except: prev_closing = 0.0
+    ni = float(data.get("New Stock", 0))
+    use = float(data.get("Use", 0))
+    ext = float(data.get("External Sale", 0))
+    total = prev_closing + ni
+    row_data = {"Date": data.get("Date", ""), "Opening Stock": prev_closing, "New Stock": ni, "Total": total, "Use": use, "External Sale": ext, "Closing Stock": total - use - ext}
+    ws.append_row([row_data.get(h, "") for h in headers])
 
 @app.post("/whatsapp")
 async def whatsapp_webhook(
