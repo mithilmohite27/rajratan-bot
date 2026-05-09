@@ -161,7 +161,7 @@ def simulated_llm_parser(message: str) -> dict:
 
     tokens = set(msg.split())
 
-    # ── helper: does msg contain words from a set? ────────────────────────────
+   # ── helper: does msg contain words from a set? ────────────────────────────
     def has(*kw_sets):
         combined = set().union(*kw_sets)
         return bool(tokens & combined) or any(k in msg for k in combined if " " in k)
@@ -187,7 +187,7 @@ def simulated_llm_parser(message: str) -> dict:
         }
 
     # ── 1. Daily Block Production ─────────────────────────────────────────────
-    is_production    = has(PRODUCTION_KW) or (
+    is_production     = has(PRODUCTION_KW) or (
         has(BLOCK_KW) and not has(CLIENT_KW - BLOCK_KW) and not has(CASH_OUT_KW)
     )
     is_sale_of_blocks = has(CLIENT_KW) and has(BLOCK_KW)
@@ -206,7 +206,6 @@ def simulated_llm_parser(message: str) -> dict:
                 "Date":      today,
                 "New Stock": qty_val,
                 "Sales":     sales_val,
-                "Note":      message,
             },
             "confirmation_message": (
                 f"🏭 *Block Production*\n"
@@ -217,7 +216,7 @@ def simulated_llm_parser(message: str) -> dict:
             "missing_fields": [],
         }
 
-    # ── 2. Block Stock manual update (opening-new-sales format) ──────────────
+    # ── 2. Block Stock manual update ──────────────────────────────────────────
     if has(BLOCK_KW) and re.search(r"\bopening\b", msg):
         op, ni, sl = _stock_fields(msg)
         total   = op + ni
@@ -245,62 +244,78 @@ def simulated_llm_parser(message: str) -> dict:
 
     # ── 3. Cement Stock ───────────────────────────────────────────────────────
     if has(CEMENT_KW):
-        if re.search(r"\bopening\b", msg):
-            op, ni, sl = _stock_fields(msg)
-            ext_m    = re.search(r"\bexternal\s*[:\-]?\s*(\d+)", msg)
-            ext_sale = int(ext_m.group(1)) if ext_m else 0
-            total    = op + ni
-            closing  = total - sl - ext_sale
-            return {
-                "language": lang,
-                "intent":   "update_cement_stock",
-                "target_sheet": "Cement_Stocks",
-                "extracted_data": {
-                    "Date":          today,
-                    "Opening Stock": op,
-                    "New Stock":     ni,
-                    "Total":         total,
-                    "Sales":         sl,
-                    "External Sale": ext_sale,
-                    "Closing Stock": closing,
-                },
-                "confirmation_message": (
-                    f"🏗️ *Cement Stock Update*\n"
-                    f"Opening: {op} | New: {ni}\n"
-                    f"Total: {total} | Sales: {sl} | Ext: {ext_sale}\n"
-                    f"Closing: {closing}\n\nConfirm? Reply *Yes* / *No*"
-                ),
-                "missing_fields": [],
-            }
-        else:
-            qty_val  = _extract_qty(msg)
+        new_stock = 0.0
+        use_val   = 0.0
+        ext_val   = 0.0
+
+        # Extract new cement arriving
+        new_m = re.search(
+            r"\b(?:new|bought|purchase|kharida|aavyu|mangaya)\s*[:\-]?\s*(\d+)", msg
+        )
+        if new_m:
+            new_stock = float(new_m.group(1))
+
+        # Extract Use (used in production)
+        use_m = re.search(
+            r"\b(?:use|used|upyog|vaaprya|lagya|lagu|production use)\s*[:\-]?\s*(\d+)", msg
+        )
+        if use_m:
+            use_val = float(use_m.group(1))
+
+        # Extract External Sale
+        ext_m = re.search(r"\b(?:external|ext|bhar|bahara)\s*[:\-]?\s*(\d+)", msg)
+        if ext_m:
+            ext_val = float(ext_m.group(1))
+
+        # If no explicit use/ext, treat first number as "use"
+        if use_val == 0.0 and ext_val == 0.0 and new_stock == 0.0:
+            use_val = _first_number(msg)
+
+        # If new cement purchase
+        if new_stock > 0 and use_val == 0.0 and ext_val == 0.0:
             rate_val = _extract_rate(msg)
-            ext_m    = re.search(r"\bexternal\s*[:\-]?\s*(\d+)", msg)
-            ext_sale = int(ext_m.group(1)) if ext_m else 0
-            missing  = []
-            if rate_val == 0.0: missing.append("rate")
+            missing  = [] if rate_val > 0 else ["rate"]
             return {
                 "language": lang,
                 "intent":   "add_cement_purchase",
                 "target_sheet": "Cement_Stocks",
                 "extracted_data": {
                     "Date":          today,
-                    "New Stock":     qty_val,
-                    "Sales":         0,
-                    "External Sale": ext_sale,
-                    "Rate_INR":      rate_val,
-                    "Amount_INR":    round(qty_val * rate_val, 2),
-                    "Note":          message,
+                    "New Stock":     new_stock,
+                    "Use":           0,
+                    "External Sale": 0,
                 },
                 "confirmation_message": (
                     f"🏗️ *Cement Purchase*\n"
-                    f"Qty: {qty_val} bags/tons\n"
+                    f"New Stock: {new_stock} bags\n"
                     f"Rate: ₹{rate_val}\n"
-                    f"Amount: ₹{round(qty_val * rate_val, 2)}\n\n"
+                    f"Amount: ₹{round(new_stock * rate_val, 2)}\n\n"
                     f"Confirm? Reply *Yes* / *No*"
                 ) if not missing else _missing_field_message("rate", lang),
                 "missing_fields": missing,
             }
+
+        # Daily usage entry
+        return {
+            "language": lang,
+            "intent":   "update_cement_stock",
+            "target_sheet": "Cement_Stocks",
+            "extracted_data": {
+                "Date":          today,
+                "New Stock":     new_stock,
+                "Use":           use_val,
+                "External Sale": ext_val,
+            },
+            "confirmation_message": (
+                f"🏗️ *Cement Stock Update*\n"
+                f"New Stock: {new_stock} bags\n"
+                f"Used in production: {use_val} bags\n"
+                f"External Sale: {ext_val} bags\n"
+                f"Closing = Opening + {new_stock} - {use_val} - {ext_val}\n\n"
+                f"Confirm? Reply *Yes* / *No*"
+            ),
+            "missing_fields": [],
+        }
 
     # ── 4. Chemical / Grit / Powder purchase ─────────────────────────────────
     if has(CHEMICAL_KW) or (has(PURCHASE_KW) and not has(CEMENT_KW | CLIENT_KW)):
@@ -513,8 +528,6 @@ def write_production_to_block_stocks(data: dict):
         data["Closing"] = prev_closing + ni
     write_to_sheet("Block_Stocks", data)
 
-# ─── Webhook ──────────────────────────────────────────────────────────────────
-
 @app.post("/whatsapp")
 async def whatsapp_webhook(
     From: str = Form(...),
@@ -534,10 +547,14 @@ async def whatsapp_webhook(
             data   = session["extracted_data"]
             intent = session.get("intent", "")
             try:
-                if intent == "add_production":
-                    write_production_to_block_stocks(data)
-                elif target in ("Block_Stocks", "Cement_Stocks"):
-                    write_stocks_with_continuity(target, data)
+                if intent == "set_base_stock":
+                    write_base_stock(target, float(data["base_value"]), data["Date"])
+                elif intent == "add_production":
+                    write_block_stock(data)
+                elif intent == "update_block_stock":
+                    write_block_stock_manual(data)
+                elif intent in ("update_cement_stock", "add_cement_purchase"):
+                    write_cement_stock(data)
                 else:
                     write_to_sheet(target, data)
 
@@ -571,14 +588,10 @@ async def whatsapp_webhook(
     else:
         parsed = simulated_llm_parser(msg)
 
-        # If missing fields — don't save, ask user to resend with full info
         if parsed.get("missing_fields"):
             twiml_msg.body(parsed["confirmation_message"])
-            # Don't store session — user must resend complete message
-
         elif parsed["intent"] == "unknown" or not parsed["target_sheet"]:
             twiml_msg.body(parsed["confirmation_message"])
-
         else:
             user_sessions[sender] = {
                 "state":          "pending",
@@ -590,6 +603,7 @@ async def whatsapp_webhook(
             twiml_msg.body(parsed["confirmation_message"])
 
     return Response(content=str(resp), media_type="application/xml")
+
 
 @app.get("/health")
 def health():
