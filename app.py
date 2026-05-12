@@ -552,20 +552,28 @@ def prep_clients(df):
             df["Total_INR"] = df["Qty_Brass"] * df["Rate_INR"]
     return df
 
-def prep_stocks(df):
+def prep_stocks(df, sheet_type="block"):
     if df.empty: return df
-    aliases = {
-        "Opening": ["Opening","opening","OPENING","Open","open"],
-        "New_In":  ["New_In","new_in","NewIn","New In","NEW_IN","Purchased","In"],
-        "Sales":   ["Sales","sales","SALES","Sold","sold"],
-        "Closing": ["Closing","closing","CLOSING","Close","close"],
+    # Exact column names from sheet
+    # Block:  Opening Stock, New Stock, Total, Sales, Closing Stock
+    # Cement: Opening Stock, New Stock, Total, Use, External Sale, Closing Stock
+    renames = {
+        "Opening Stock": "Opening",
+        "New Stock":     "New_In",
+        "Closing Stock": "Closing",
+        "External Sale": "Sales",  # cement
+        "Sales":         "Sales",  # block
+        "Use":           "Internal_Use",
+        "Total":         "Total",
     }
-    for target, candidates in aliases.items():
-        c = find_col(df, *candidates)
-        if c and c != target:
-            df.rename(columns={c: target}, inplace=True)
-        if target in df.columns:
-            df = num_col(df, target)
+    df.rename(columns=renames, inplace=True)
+    for col in ["Opening","New_In","Closing","Sales","Internal_Use","Total"]:
+        if col in df.columns: df = num_col(df, col)
+    # For cement, combine Use + External Sale as total sales
+    if sheet_type == "cement":
+        use = df["Internal_Use"] if "Internal_Use" in df.columns else 0
+        sal = df["Sales"]        if "Sales"        in df.columns else 0
+        df["Sales"] = use + sal if not isinstance(use, int) else sal
     return df
 
 def prep_chemical(df):
@@ -596,14 +604,7 @@ def prep_cashflow(df):
 
 def prep_labour(df):
     if df.empty: return df
-    amt_c  = find_col(df, "Amount_INR","Amount","amount","AMOUNT","Salary","salary","Pay")
-    name_c = find_col(df, "Worker_Name","Name","name","Worker","worker","Employee")
-    role_c = find_col(df, "Role","role","ROLE","Designation","designation","Position")
-    days_c = find_col(df, "Days","days","DAYS","Days_Worked","days_worked","Working_Days")
-    if amt_c  and amt_c  != "Amount_INR":   df.rename(columns={amt_c:"Amount_INR"},    inplace=True)
-    if name_c and name_c != "Worker_Name":  df.rename(columns={name_c:"Worker_Name"},  inplace=True)
-    if role_c and role_c != "Role":         df.rename(columns={role_c:"Role"},          inplace=True)
-    if days_c and days_c != "Days":         df.rename(columns={days_c:"Days"},          inplace=True)
+    # Exact columns: Date, Worker_Name, Amount_INR, Notes
     df = num_col(df, "Amount_INR")
     return df
 
@@ -826,8 +827,8 @@ if nav == "⬡  Overview":
 
     # Load data
     df_clients  = prep_clients(load_sheet("Clients"))
-    df_block    = prep_stocks(load_sheet("Block_Stocks"))
-    df_cement   = prep_stocks(load_sheet("Cement_Stocks"))
+    df_block    = prep_stocks(load_sheet("Block_Stocks"), "block")
+    df_cement   = prep_stocks(load_sheet("Cement_Stocks"), "cement")
     df_cf       = prep_cashflow(load_sheet("Cashflow"))
     df_prod     = load_sheet("Production_Notes")
     df_chem     = prep_chemical(load_sheet("Greet_Powder_Chemical"))
@@ -959,12 +960,12 @@ elif nav == "◧  Block & Cement":
 
     t1, t2, t3 = st.tabs(["🧱 Block Stocks", "🏗️ Cement Stocks", "📋 Production Notes"])
 
-    for tab, sheet_name, color, label, unit in [
-        (t1, "Block_Stocks",  S["blue"],   "Block",  "units"),
-        (t2, "Cement_Stocks", S["amber"],  "Cement", "bags"),
+    for tab, sheet_name, sheet_type, color, label, unit in [
+        (t1, "Block_Stocks",  "block",  S["blue"],  "Block",  "units"),
+        (t2, "Cement_Stocks", "cement", S["amber"], "Cement", "bags"),
     ]:
         with tab:
-            df = prep_stocks(load_sheet(sheet_name))
+            df = prep_stocks(load_sheet(sheet_name), sheet_type)
             if not df.empty:
                 last = df.iloc[-1]
                 date_col = "Date" if "Date" in df.columns else df.columns[0]
@@ -1273,9 +1274,8 @@ elif nav == "◎  Financials":
             with c3: metric_card("Avg Per Worker",    inr(int(total_sal/len(df))) if len(df)>0 else "₹0", "Average salary", S["purple"])
 
             st.markdown("<br>", unsafe_allow_html=True)
-            name_col = "Worker_Name" if "Worker_Name" in df.columns else df.columns[0]
-            role_col = "Role" if "Role" in df.columns else None
-            days_col = "Days" if "Days" in df.columns else None
+            # Exact columns: Date, Worker_Name, Amount_INR, Notes
+            name_col = "Worker_Name"
 
             by_worker = df.groupby(name_col)["Amount_INR"].sum().reset_index().sort_values("Amount_INR")
             fig = h_bar_chart(
@@ -1287,26 +1287,24 @@ elif nav == "◎  Financials":
             chart_card("Salary by Worker", fig)
 
             section_label("All Records")
-            role_map = {"Supervisor":"amber","Operator":"blue","Helper":"purple","Loader":"green"}
             rows_html = ""
             for _, row in df.iterrows():
-                name  = row.get(name_col,"—")
-                role  = str(row.get(role_col,"—")) if role_col else "—"
-                days  = str(row.get(days_col,"—")) if days_col else "—"
-                amt   = inr(row["Amount_INR"])
-                r_type = role_map.get(role,"blue")
+                name  = row.get("Worker_Name","—")
+                amt   = inr(row.get("Amount_INR",0))
+                date  = str(row.get("Date","—"))
+                note  = str(row.get("Notes","—"))
                 rows_html += f"""
                 <tr>
+                    <td class="mono" style="color:{S['muted']}">{date}</td>
                     <td style="font-weight:600">{name}</td>
-                    <td>{badge(role, r_type)}</td>
-                    <td class="mono" style="color:{S['muted']}">{days} days</td>
                     <td class="mono" style="color:{S['amber']};font-weight:600">{amt}</td>
+                    <td style="color:{S['muted']};font-size:12px">{note}</td>
                 </tr>"""
             st.markdown(f"""
             <div class="table-card">
                 <table class="rtable">
                     <thead><tr>
-                        <th>Worker Name</th><th>Role</th><th>Days Worked</th><th>Amount</th>
+                        <th>Date</th><th>Worker Name</th><th>Amount</th><th>Notes</th>
                     </tr></thead>
                     <tbody>{rows_html}</tbody>
                 </table>
