@@ -52,6 +52,13 @@ html, body, [class*="css"] {{
     background-color: {S['bg']} !important;
     color: {S['text']} !important;
 }}
+[data-testid="stApp"],
+[data-testid="stAppViewContainer"],
+[data-testid="stMain"],
+.stMainBlockContainer,
+section.main > div {{
+    background-color: {S['bg']} !important;
+}}
 
 /* ── Sidebar ── */
 section[data-testid="stSidebar"] {{
@@ -473,6 +480,7 @@ def compact(v):
 
 def num_col(df, col):
     if col in df.columns:
+        df[col] = df[col].astype(str).str.replace("₹","",regex=False).str.replace(",","",regex=False).str.strip()
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
     return df
 
@@ -504,7 +512,13 @@ def load_sheet(name: str) -> pd.DataFrame:
         gc = get_gc()
         ws = gc.open_by_key(sheet_id).worksheet(name)
         data = ws.get_all_records()
-        return pd.DataFrame(data) if data else pd.DataFrame()
+        if not data:
+            return pd.DataFrame()
+        df = pd.DataFrame(data)
+        # Normalize Date column: strip time, keep only date string
+        if "Date" in df.columns:
+            df["Date"] = pd.to_datetime(df["Date"], errors="coerce").dt.strftime("%Y-%m-%d").fillna(df["Date"].astype(str))
+        return df
     except gspread.exceptions.WorksheetNotFound:
         st.warning(f"Sheet tab '{name}' not found.")
         return pd.DataFrame()
@@ -513,32 +527,83 @@ def load_sheet(name: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 # ── Data prep helpers ──────────────────────────────────────────────────────────
+def find_col(df, *candidates):
+    """Return first matching column name from candidates (case-insensitive)."""
+    lower_map = {c.lower().replace(" ","_"): c for c in df.columns}
+    for cand in candidates:
+        if cand in df.columns: return cand
+        if cand.lower().replace(" ","_") in lower_map: return lower_map[cand.lower().replace(" ","_")]
+    return None
+
+def clean_num(df, col):
+    """Remove ₹, commas, spaces then convert to float."""
+    if col not in df.columns: return df
+    df[col] = df[col].astype(str).str.replace("₹","",regex=False).str.replace(",","",regex=False).str.strip()
+    df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+    return df
+
 def prep_clients(df):
     if df.empty: return df
-    df = num_col(df, "Qty_Brass"); df = num_col(df, "Rate_INR")
-    if "Qty_Brass" in df.columns and "Rate_INR" in df.columns:
-        df["Total_INR"] = df["Qty_Brass"] * df["Rate_INR"]
+    # Rename Client_Name -> Name
+    if "Client_Name" in df.columns: df.rename(columns={"Client_Name":"Name"}, inplace=True)
+    for col in ["Qty_Brass","Rate_INR","Total_INR"]: df = clean_num(df, col)
+    if "Total_INR" not in df.columns or df["Total_INR"].sum() == 0:
+        if "Qty_Brass" in df.columns and "Rate_INR" in df.columns:
+            df["Total_INR"] = df["Qty_Brass"] * df["Rate_INR"]
     return df
 
 def prep_stocks(df):
     if df.empty: return df
-    for c in ["Opening","New_In","Sales","Closing"]: df = num_col(df, c)
+    aliases = {
+        "Opening": ["Opening","opening","OPENING","Open","open"],
+        "New_In":  ["New_In","new_in","NewIn","New In","NEW_IN","Purchased","In"],
+        "Sales":   ["Sales","sales","SALES","Sold","sold"],
+        "Closing": ["Closing","closing","CLOSING","Close","close"],
+    }
+    for target, candidates in aliases.items():
+        c = find_col(df, *candidates)
+        if c and c != target:
+            df.rename(columns={c: target}, inplace=True)
+        if target in df.columns:
+            df = num_col(df, target)
     return df
 
 def prep_chemical(df):
     if df.empty: return df
+    qty_c  = find_col(df, "Qty_Ton","Qty","qty","QTY","Quantity","qty_ton")
+    rate_c = find_col(df, "Rate_INR","Rate","rate","RATE","Price","rate_inr")
+    item_c = find_col(df, "Item_Name","Item","item","ITEM","Name","name","Material")
+    amt_c  = find_col(df, "Amount_INR","Amount","amount","AMOUNT","Total","total")
+    if qty_c  and qty_c  != "Qty_Ton":    df.rename(columns={qty_c:"Qty_Ton"},    inplace=True)
+    if rate_c and rate_c != "Rate_INR":   df.rename(columns={rate_c:"Rate_INR"},  inplace=True)
+    if item_c and item_c != "Item_Name":  df.rename(columns={item_c:"Item_Name"}, inplace=True)
+    if amt_c  and amt_c  != "Amount_INR": df.rename(columns={amt_c:"Amount_INR"}, inplace=True)
     df = num_col(df, "Qty_Ton"); df = num_col(df, "Rate_INR")
-    if "Qty_Ton" in df.columns and "Rate_INR" in df.columns:
+    if "Qty_Ton" in df.columns and "Rate_INR" in df.columns and "Amount_INR" not in df.columns:
         df["Amount_INR"] = df["Qty_Ton"] * df["Rate_INR"]
+    elif "Amount_INR" in df.columns:
+        df = num_col(df, "Amount_INR")
     return df
 
 def prep_cashflow(df):
     if df.empty: return df
+    amt_c  = find_col(df, "Amount_INR","Amount","amount","AMOUNT","amount_inr","Value")
+    type_c = find_col(df, "Type","type","TYPE","Flow_Type","flow_type","IN_OUT")
+    if amt_c  and amt_c  != "Amount_INR": df.rename(columns={amt_c:"Amount_INR"},  inplace=True)
+    if type_c and type_c != "Type":       df.rename(columns={type_c:"Type"},        inplace=True)
     df = num_col(df, "Amount_INR")
     return df
 
 def prep_labour(df):
     if df.empty: return df
+    amt_c  = find_col(df, "Amount_INR","Amount","amount","AMOUNT","Salary","salary","Pay")
+    name_c = find_col(df, "Worker_Name","Name","name","Worker","worker","Employee")
+    role_c = find_col(df, "Role","role","ROLE","Designation","designation","Position")
+    days_c = find_col(df, "Days","days","DAYS","Days_Worked","days_worked","Working_Days")
+    if amt_c  and amt_c  != "Amount_INR":   df.rename(columns={amt_c:"Amount_INR"},    inplace=True)
+    if name_c and name_c != "Worker_Name":  df.rename(columns={name_c:"Worker_Name"},  inplace=True)
+    if role_c and role_c != "Role":         df.rename(columns={role_c:"Role"},          inplace=True)
+    if days_c and days_c != "Days":         df.rename(columns={days_c:"Days"},          inplace=True)
     df = num_col(df, "Amount_INR")
     return df
 
@@ -724,6 +789,14 @@ with st.sidebar:
             st.rerun()
     with col2:
         st.button("⚙", use_container_width=True)
+
+    with st.expander("🔍 Debug: Sheet Columns"):
+        for sheet_name in ["Clients","Block_Stocks","Cement_Stocks","Cashflow","Greet_Powder_Chemical","Production_Notes","Labour_Salary"]:
+            _df = load_sheet(sheet_name)
+            if not _df.empty:
+                st.markdown(f"**{sheet_name}**: `{list(_df.columns)}`")
+            else:
+                st.markdown(f"**{sheet_name}**: _(empty or not found)_")
 
     sheet_id = ""
     try:    sheet_id = st.secrets.get("GOOGLE_SHEET_ID","")
