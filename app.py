@@ -566,13 +566,18 @@ def area_chart(x_vals, y_vals, name, color, y_fmt=None):
         line=dict(color=color, width=2.5),
         marker=dict(size=4, color=color),
         fill="tozeroy",
-        fillcolor=color.replace(")", ",0.12)").replace("rgb", "rgba") if "rgb" in color else f"{color}1a",
+        fillcolor=hex_to_rgba(color, 0.12),
     ))
     layout = chart_layout()
     if y_fmt:
         layout["yaxis"]["tickprefix"] = "₹"
     fig.update_layout(**layout)
     return fig
+
+def hex_to_rgba(hex_color, alpha=0.1):
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2],16), int(h[2:4],16), int(h[4:6],16)
+    return f"rgba({r},{g},{b},{alpha})"
 
 def dual_area_chart(x_vals, y1, y2, n1, n2, c1, c2):
     fig = go.Figure()
@@ -582,7 +587,7 @@ def dual_area_chart(x_vals, y1, y2, n1, n2, c1, c2):
             line=dict(color=c, width=2),
             marker=dict(size=3, color=c),
             fill="tozeroy",
-            fillcolor=c+"1a" if not c.startswith("rgba") else c,
+            fillcolor=hex_to_rgba(c, 0.12),
         ))
     fig.update_layout(yaxis_tickprefix="₹", **chart_layout())
     return fig
