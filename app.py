@@ -207,28 +207,35 @@ def fmt_int(val):
 
 @st.cache_resource(ttl=300)
 def get_client():
-    # BUG FIX: explicitly load .env values here too, in case Streamlit
-    # runs in a different process that didn't inherit the environment
-    creds_path = os.getenv("GOOGLE_CREDS_JSON", "credentials.json")
-    creds = Credentials.from_service_account_file(creds_path, scopes=SCOPES)
+    import json
+    creds_content = None
+    try:
+        creds_content = st.secrets["GOOGLE_CREDS_JSON_CONTENT"]
+    except:
+        creds_content = os.getenv("GOOGLE_CREDS_JSON_CONTENT")
+    if creds_content:
+        creds = Credentials.from_service_account_info(
+            json.loads(creds_content), scopes=SCOPES
+        )
+    else:
+        creds = Credentials.from_service_account_file(
+            os.getenv("GOOGLE_CREDS_JSON", "credentials.json"), scopes=SCOPES
+        )
     return gspread.authorize(creds)
 
 @st.cache_data(ttl=300)
 def load_sheet(name: str) -> pd.DataFrame:
-    sheet_id = os.getenv("GOOGLE_SHEET_ID", SHEET_ID)
-    if not sheet_id or sheet_id == "YOUR_SHEET_ID":
-        st.error("❌ GOOGLE_SHEET_ID not set in .env file")
-        return pd.DataFrame()
     try:
+        sheet_id = st.secrets.get("GOOGLE_SHEET_ID", os.getenv("GOOGLE_SHEET_ID", ""))
         gc = get_client()
         ws = gc.open_by_key(sheet_id).worksheet(name)
         data = ws.get_all_records()
         return pd.DataFrame(data) if data else pd.DataFrame()
     except gspread.exceptions.WorksheetNotFound:
-        st.warning(f"Sheet tab '{name}' not found — create it in Google Sheets.")
+        st.warning(f"Sheet tab '{name}' not found.")
         return pd.DataFrame()
     except Exception as e:
-        st.error(f"Connection error for '{name}': {e}")
+        st.error(f"Error loading '{name}': {e}")
         return pd.DataFrame()
 
 # ── Compute helpers ───────────────────────────────────────────────────────────
